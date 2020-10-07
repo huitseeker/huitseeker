@@ -7,4 +7,3 @@ I work at the intersection of research and engineering, most recently at [Novi](
 
 
 [![Twitter Follow](https://img.shields.io/twitter/follow/huitseeker?label=Follow&style=social)](https://twitter.com/intent/follow?screen_name=huitseeker)
-![](https://hits.dwyl.com/huitseeker/huitseeker.svg)
