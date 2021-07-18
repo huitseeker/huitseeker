@@ -1,6 +1,6 @@
 ### 👋 Hi, I'm François Garillot.
 
-I work at the intersection of research and engineering, most recently at [Novi](https://novi.com/) (formerly known as Calibra) on [Diem](https://www.diem.com/en-us/) (formerly known as [Libra](https://libra.org/en-US/)).
+I work at the intersection of research and engineering, formerly at [Novi](https://novi.com/) on [Diem](https://www.diem.com/).
 
 - 🔬 I recently completed a Coq proof of the LibraBFT consensus algorithm safety ([proof](http://github.com/novifinancial/librachain), [talk](https://www.youtube.com/watch?v=mgh_b7j4ITI), [slides](https://www.youtube.com/watch?v=mgh_b7j4IT)).
 - 📖 I co-wrote a book on Streaming with [Apache Spark](https://spark.apache.org/) ([the book](https://www.oreilly.com/library/view/stream-processing-with/9781491944233/), [the code examples repository](https://github.com/stream-processing-with-spark)).
