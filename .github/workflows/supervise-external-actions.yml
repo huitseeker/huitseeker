@@ -1,0 +1,149 @@
+name: Supervise external GitHub Actions
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * *"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: gha-supervision
+  cancel-in-progress: false
+
+jobs:
+  supervise:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Evaluate supervised workflows
+        id: monitor
+        continue-on-error: true
+        run: |
+          python scripts/check_monitored_actions.py \
+            --config gha-supervision.toml \
+            --report build/gha-supervision-report.md \
+            --json-out build/gha-supervision-result.json \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Publish report to workflow summary
+        if: always() && steps.monitor.outputs.report_path != ''
+        run: cat "${{ steps.monitor.outputs.report_path }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Ensure issue labels exist
+        if: always() && steps.monitor.outputs.issue_labels != ''
+        uses: actions/github-script@v8
+        env:
+          ISSUE_LABELS: ${{ steps.monitor.outputs.issue_labels }}
+        with:
+          script: |
+            const labels = (process.env.ISSUE_LABELS || "")
+              .split(",")
+              .map((label) => label.trim())
+              .filter(Boolean);
+
+            for (const name of labels) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  color: "d73a4a",
+                  description: "Issue used by the external GitHub Actions supervision workflow.",
+                });
+              }
+            }
+
+      - name: Find canonical supervision issue
+        id: canonical_issue
+        if: always() && steps.monitor.outputs.issue_title != ''
+        uses: actions/github-script@v8
+        env:
+          ISSUE_TITLE: ${{ steps.monitor.outputs.issue_title }}
+          ISSUE_LABELS: ${{ steps.monitor.outputs.issue_labels }}
+        with:
+          script: |
+            const title = process.env.ISSUE_TITLE || "";
+            const labels = (process.env.ISSUE_LABELS || "")
+              .split(",")
+              .map((label) => label.trim())
+              .filter(Boolean);
+            const labelFilter = labels[0] || undefined;
+
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "all",
+              labels: labelFilter,
+              per_page: 100,
+            });
+
+            const matches = issues
+              .filter((issue) => !issue.pull_request && issue.title === title)
+              .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at));
+
+            if (matches.length > 0) {
+              core.setOutput("number", String(matches[0].number));
+              core.setOutput("state", matches[0].state);
+            }
+
+      - name: Reopen supervision issue
+        if: always() && steps.monitor.outputs.has_alert == 'true' && steps.canonical_issue.outputs.number != '' && steps.canonical_issue.outputs.state == 'closed'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number("${{ steps.canonical_issue.outputs.number }}"),
+              state: "open",
+            });
+
+      - name: Create or update supervision issue
+        if: always() && steps.monitor.outputs.has_alert == 'true' && steps.monitor.outputs.report_path != ''
+        uses: peter-evans/create-issue-from-file@v6
+        with:
+          title: ${{ steps.monitor.outputs.issue_title }}
+          content-filepath: ${{ steps.monitor.outputs.report_path }}
+          labels: ${{ steps.monitor.outputs.issue_labels }}
+          issue-number: ${{ steps.canonical_issue.outputs.number }}
+
+      - name: Close supervision issue after recovery
+        if: always() && steps.monitor.outputs.has_alert == 'false' && steps.monitor.outputs.close_on_success == 'true' && steps.canonical_issue.outputs.number != '' && steps.canonical_issue.outputs.state == 'open'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number("${{ steps.canonical_issue.outputs.number }}"),
+              state: "closed",
+              state_reason: "completed",
+            });
+
+      - name: Fail workflow when attention is required
+        if: always() && steps.monitor.outputs.has_alert == 'true'
+        run: |
+          echo "One or more supervised checks require attention."
+          exit 1

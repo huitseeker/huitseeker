@@ -1,0 +1,47 @@
+[report]
+issue_title = "GitHub Actions supervision report"
+issue_labels = ["gha-supervision"]
+close_on_success = true
+
+[[checks]]
+name = "miden-vm workspace release dry-run"
+kind = "job"
+repo = "0xMiden/miden-vm"
+workflow = ".github/workflows/workspace-dry-run.yml"
+event = "push"
+branch = "next"
+job_name = "release-dry-run"
+
+[[checks]]
+name = "crypto workspace release dry-run"
+kind = "job"
+repo = "0xMiden/crypto"
+workflow = ".github/workflows/workspace-dry-run.yml"
+event = "push"
+branch = "next"
+job_name = "release-dry-run"
+
+[[checks]]
+name = "p3-miden workspace release dry-run"
+kind = "job"
+repo = "0xMiden/p3-miden"
+workflow = ".github/workflows/release-dry-run.yml"
+event = "push"
+branch = "main"
+job_name = "Verify workspace release (dry-run)"
+
+[[checks]]
+name = "crypto daily fuzz smoke test"
+kind = "workflow"
+repo = "0xMiden/crypto"
+workflow = ".github/workflows/fuzz.yml"
+event = "schedule"
+branch = "next"
+
+[[checks]]
+name = "miden-vm daily fuzz smoke test"
+kind = "workflow"
+repo = "0xMiden/miden-vm"
+workflow = ".github/workflows/fuzz.yml"
+event = "schedule"
+branch = "next"
