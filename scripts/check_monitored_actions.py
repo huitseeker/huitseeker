@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -105,14 +106,25 @@ class GitHubClient:
             },
         )
 
-        try:
-            with urllib.request.urlopen(request) as response:
-                return json.load(response)
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise GitHubApiError(f"{exc.code} {exc.reason} for {url}: {body}") from exc
-        except urllib.error.URLError as exc:
-            raise GitHubApiError(f"Request failed for {url}: {exc.reason}") from exc
+        for attempt in range(4):
+            try:
+                with urllib.request.urlopen(request) as response:
+                    return json.load(response)
+            except urllib.error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                if exc.code in {429, 500, 502, 503, 504} and attempt < 3:
+                    retry_after = exc.headers.get("Retry-After")
+                    delay = int(retry_after) if retry_after and retry_after.isdigit() else 2 ** attempt
+                    time.sleep(delay)
+                    continue
+                raise GitHubApiError(f"{exc.code} {exc.reason} for {url}: {body}") from exc
+            except urllib.error.URLError as exc:
+                if attempt < 3:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise GitHubApiError(f"Request failed for {url}: {exc.reason}") from exc
+
+        raise GitHubApiError(f"Request failed for {url}: exhausted retries")
 
     def _paginate(self, path: str, key: str, params: dict[str, object] | None = None) -> list[dict[str, object]]:
         params = dict(params or {})
@@ -235,6 +247,37 @@ def markdown_link(label: str, url: str | None) -> str:
     return label
 
 
+def repo_actions_url(repo: str) -> str:
+    return f"https://github.com/{repo}/actions"
+
+
+def workflow_page_url(repo: str, workflow_path: str) -> str:
+    workflow_name = workflow_path.rsplit("/", 1)[-1]
+    return f"https://github.com/{repo}/actions/workflows/{workflow_name}"
+
+
+def fallback_check_url(check: CheckConfig) -> str | None:
+    if not check.repo or check.repo == "-":
+        return None
+
+    workflow = check.workflow.strip()
+    if workflow.endswith((".yml", ".yaml")):
+        return workflow_page_url(check.repo, workflow)
+    return repo_actions_url(check.repo)
+
+
+def state_badge(state: str) -> str:
+    return {
+        "success": "🟢",
+        "failure": "🔴",
+        "non_passing": "🟠",
+        "in_progress": "🟡",
+        "config_drift": "⚠️",
+        "no_data": "⚪",
+        "error": "🚨",
+    }.get(state, "❔")
+
+
 def format_run(run: dict[str, object] | None) -> str:
     if not run:
         return "none"
@@ -307,10 +350,9 @@ def describe_common_metadata(result: CheckResult, *, workflow_data: dict[str, ob
     result.lines.append(f"Repo: `{result.repo}`")
     result.lines.append(f"Workflow: `{workflow_data.get('path', result.workflow)}`")
     if latest_run:
-        result.lines.append(f"Latest matching run: {format_run(latest_run)}")
-        result.lines.append(
-            f"Latest run status: `{latest_run.get('status', 'unknown')}` / `{latest_run.get('conclusion', 'n/a')}`"
-        )
+        status = latest_run.get("status", "unknown")
+        conclusion = latest_run.get("conclusion", "n/a")
+        result.lines.append(f"Run: {format_run(latest_run)} (`{status}` / `{conclusion}`)")
 
 
 def evaluate_workflow_check(client: GitHubClient, check: CheckConfig) -> CheckResult:
@@ -325,6 +367,7 @@ def evaluate_workflow_check(client: GitHubClient, check: CheckConfig) -> CheckRe
                 state="config_drift",
                 alert=True,
                 headline=f"Workflow selector {check.workflow!r} matched multiple workflows.",
+                latest_url=repo_actions_url(check.repo),
                 lines=[
                     f"Repo: `{check.repo}`",
                     "Matches:",
@@ -340,6 +383,7 @@ def evaluate_workflow_check(client: GitHubClient, check: CheckConfig) -> CheckRe
             state="config_drift",
             alert=True,
             headline=f"Workflow {check.workflow!r} was not found.",
+            latest_url=repo_actions_url(check.repo),
             lines=[f"Repo: `{check.repo}`"],
         )
 
@@ -357,6 +401,7 @@ def evaluate_workflow_check(client: GitHubClient, check: CheckConfig) -> CheckRe
             state="no_data",
             alert=True,
             headline="No matching workflow runs were found.",
+            latest_url=workflow_page_url(check.repo, str(workflow_data.get("path", check.workflow))),
         )
         describe_common_metadata(result, workflow_data=workflow_data, latest_run=latest_run)
         return result
@@ -433,6 +478,7 @@ def evaluate_job_check(client: GitHubClient, check: CheckConfig) -> CheckResult:
                 state="config_drift",
                 alert=True,
                 headline=f"Workflow selector {check.workflow!r} matched multiple workflows.",
+                latest_url=repo_actions_url(check.repo),
                 lines=[
                     f"Repo: `{check.repo}`",
                     "Matches:",
@@ -448,6 +494,7 @@ def evaluate_job_check(client: GitHubClient, check: CheckConfig) -> CheckResult:
             state="config_drift",
             alert=True,
             headline=f"Workflow {check.workflow!r} was not found.",
+            latest_url=repo_actions_url(check.repo),
             lines=[f"Repo: `{check.repo}`"],
         )
 
@@ -465,6 +512,7 @@ def evaluate_job_check(client: GitHubClient, check: CheckConfig) -> CheckResult:
             state="no_data",
             alert=True,
             headline="No matching workflow runs were found.",
+            latest_url=workflow_page_url(check.repo, str(workflow_data.get("path", check.workflow))),
         )
         describe_common_metadata(result, workflow_data=workflow_data, latest_run=latest_run)
         return result
@@ -607,6 +655,7 @@ def evaluate_check(client: GitHubClient, check: CheckConfig) -> CheckResult:
             state="config_drift",
             alert=True,
             headline=f"Unsupported check kind {check.kind!r}.",
+            latest_url=fallback_check_url(check),
         )
     except (GitHubApiError, KeyError, ValueError) as exc:
         return CheckResult(
@@ -617,6 +666,7 @@ def evaluate_check(client: GitHubClient, check: CheckConfig) -> CheckResult:
             state="error",
             alert=True,
             headline=f"Failed to evaluate check: {exc}",
+            latest_url=fallback_check_url(check),
         )
 
 
@@ -639,10 +689,9 @@ def render_report(report: ReportConfig, config_path: Path, results: list[CheckRe
         lines.extend(["## Checks requiring attention", ""])
         for result in alerting:
             lines.append(f"### {result.name}")
-            lines.append(f"State: `{result.state}`")
-            lines.append(result.headline)
+            lines.append(f"{state_badge(result.state)} `{result.state}` {result.headline}")
             if result.latest_url:
-                lines.append(f"Primary link: {markdown_link('latest relevant run/job', result.latest_url)}")
+                lines.append(f"Link: {markdown_link('details', result.latest_url)}")
             lines.extend(result.lines)
             lines.append("")
     else:
@@ -652,10 +701,7 @@ def render_report(report: ReportConfig, config_path: Path, results: list[CheckRe
     if healthy:
         for result in healthy:
             lines.append(f"### {result.name}")
-            lines.append(f"State: `{result.state}`")
-            lines.append(result.headline)
-            if result.latest_url:
-                lines.append(f"Primary link: {markdown_link('latest relevant run/job', result.latest_url)}")
+            lines.append(f"{state_badge(result.state)} `{result.state}` {result.headline}")
             lines.extend(result.lines)
             lines.append("")
     else:
