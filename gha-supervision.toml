@@ -19,7 +19,7 @@ repo = "0xMiden/crypto"
 workflow = ".github/workflows/workspace-dry-run.yml"
 event = "push"
 branch = "next"
-job_name = "release-dry-run"
+job_name = "release-dry-run / Workspace release (dry-run)"
 
 [[checks]]
 name = "p3-miden workspace release dry-run"
