@@ -31,7 +31,7 @@ jobs:
         id: monitor
         continue-on-error: true
         env:
-          ACTIONS_MONITOR_TOKEN: ${{ github.token }}
+          ACTIONS_MONITOR_TOKEN: ${{ secrets.ACTIONS_MONITOR_TOKEN || github.token }}
         run: |
           python scripts/check_monitored_actions.py \
             --config gha-supervision.toml \
